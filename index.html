@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OBI | Order Book</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        .mono { font-family: 'Courier New', Courier, monospace; }
+        .hint { font-size: 0.7rem; color: #555; }
+        th { font-weight: 700; text-transform: uppercase; font-size: 0.65rem; }
+        .tbl { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+        .tbl td, .tbl th { border: 1px solid #e5e5e5; padding: 0.25rem 0.4rem; }
+        .tbl-meta td:first-child { font-weight: 600; background: #f9fafb; width: 10rem; }
+        .sec { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; background: #111; color: #fff; padding: 0.2rem 0.5rem; }
+        .badge { padding: 0.125rem 0.5rem; font-size: 0.75rem; border: 1px solid #000; }
+        .badge-synced { border-width: 2px; background: #000; color: #fff; font-weight: 700; }
+        .badge-syncing { border-color: #d97706; color: #92400e; font-weight: 700; }
+        .badge-snapshot { border-color: #f97316; background: #ffedd5; font-weight: 700; }
+        .badge-local { background: #f3f4f6; font-weight: 700; }
+    </style>
+</head>
+<body class="bg-white text-black min-h-screen flex flex-col text-sm">
+
+<header class="border-b-2 border-black p-3 shrink-0">
+    <h1 class="font-bold uppercase">OBI dashboard</h1>
+    <p class="hint">Display only — server computes everything.</p>
+    <div class="flex flex-wrap items-center gap-2 mt-2 mono text-xs">
+        <label for="symbol-select" class="font-bold">Pair</label>
+        <select id="symbol-select" class="border-2 border-black px-2 py-0.5"></select>
+        <span id="pair-label" class="font-bold"></span>
+        <span id="data-source-badge" class="badge">Source: —</span>
+        <span id="sync-badge" class="badge badge-syncing">Sync: —</span>
+        <span id="status-badge" class="text-gray-500">WS: …</span>
+    </div>
+    <div class="mt-2 flex flex-wrap gap-1 items-center mono text-xs">
+        <span class="font-bold">Pipeline</span>
+        <span class="bg-orange-100 border border-orange-500 px-1">① snapshot</span> →
+        <span class="bg-blue-50 border border-blue-400 px-1">② diffs</span> →
+        <span id="pipe-local" class="border-2 border-black px-1 font-bold">③ local book</span>
+    </div>
+</header>
+
+<main class="flex-grow overflow-y-auto p-3 space-y-3">
+
+    <section class="border-2 border-black">
+        <div class="sec">Summary metrics</div>
+        <table class="tbl tbl-meta mono">
+            <thead><tr><th>Metric</th><th>Value</th><th>Meaning</th></tr></thead>
+            <tbody>
+                <tr><td>OBI</td><td id="obi-val" class="font-bold">—</td><td class="hint">(bid−ask)/(bid+ask)</td></tr>
+                <tr><td>Spread</td><td id="spread-val">—</td><td class="hint">best ask − best bid</td></tr>
+                <tr><td>Best bid</td><td id="best-bid-val">—</td><td class="hint">USDT</td></tr>
+                <tr><td>Best ask</td><td id="best-ask-val">—</td><td class="hint">USDT</td></tr>
+                <tr><td>Bid volume</td><td id="bid-vol-val">—</td><td class="hint">all bid levels</td></tr>
+                <tr><td>Ask volume</td><td id="ask-vol-val">—</td><td class="hint">all ask levels</td></tr>
+                <tr><td>Bid levels</td><td id="bid-levels-val">—</td><td class="hint">count</td></tr>
+                <tr><td>Ask levels</td><td id="ask-levels-val">—</td><td class="hint">count</td></tr>
+                <tr><td>lastUpdateId</td><td id="update-id-val">—</td><td class="hint">last diff id</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="grid md:grid-cols-2 gap-3">
+        <div class="border-2 border-black p-2">
+            <div class="sec !bg-gray-200 !text-black mb-1">OBI over time</div>
+            <canvas id="chart-obi" height="130"></canvas>
+        </div>
+        <div class="border-2 border-black p-2">
+            <div class="sec !bg-gray-200 !text-black mb-1">Volume: orange=snapshot, black=local</div>
+            <canvas id="chart-volume" height="130"></canvas>
+        </div>
+    </section>
+
+    <section class="grid md:grid-cols-2 gap-3">
+        <div class="border-2 border-black p-2">
+            <div class="sec !bg-gray-200 !text-black mb-1">Depth top 10</div>
+            <canvas id="chart-depth" height="200"></canvas>
+        </div>
+        <div class="border-2 border-black">
+            <div class="sec">Book ladder (top 10)</div>
+            <p id="spread-row" class="mono text-xs text-center py-1 bg-gray-100 border-b border-black">spread —</p>
+            <div class="grid grid-cols-2">
+                <table class="tbl mono">
+                    <thead><tr class="bg-red-50"><th>Side</th><th class="text-right">Price</th><th class="text-right">Size</th></tr></thead>
+                    <tbody id="asks-body"></tbody>
+                </table>
+                <table class="tbl mono">
+                    <thead><tr class="bg-green-50"><th>Side</th><th class="text-right">Price</th><th class="text-right">Size</th></tr></thead>
+                    <tbody id="bids-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section class="border-2 border-black">
+        <div class="sec !bg-gray-200 !text-black">Server state</div>
+        <table class="tbl tbl-meta mono">
+            <tbody>
+                <tr><td>Type</td><td id="meta-type">—</td></tr>
+                <tr><td>Source</td><td id="meta-source">—</td></tr>
+                <tr><td>Symbol</td><td id="meta-symbol">—</td></tr>
+                <tr><td>Synced</td><td id="meta-synced">—</td></tr>
+            </tbody>
+        </table>
+    </section>
+
+    <section class="border-2 border-black">
+        <div class="sec !bg-gray-200 !text-black">Sync log</div>
+        <div class="max-h-40 overflow-auto">
+            <table class="tbl mono">
+                <thead class="sticky top-0 bg-white"><tr><th>Time</th><th>Message</th><th>Extra</th></tr></thead>
+                <tbody id="log-body"></tbody>
+            </table>
+        </div>
+    </section>
+</main>
+
+<script>
+(() => {
+    const $ = (id) => document.getElementById(id);
+    const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+    const METRIC_IDS = [
+        'obi-val', 'spread-val', 'best-bid-val', 'best-ask-val',
+        'bid-vol-val', 'ask-vol-val', 'bid-levels-val', 'ask-levels-val', 'update-id-val',
+    ];
+    const META_IDS = ['meta-type', 'meta-source', 'meta-symbol', 'meta-synced'];
+    const LOG_MAX = 100, OBI_MAX = 80;
+
+    let ws = null, currentSymbol = null, reconnectTimer = null;
+    let snapshotVol = { bid: null, ask: null };
+    const obiHist = { labels: [], values: [] };
+    let charts = {};
+
+    const fmt = (n) => {
+        if (n == null || Number.isNaN(n)) return '—';
+        if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+        if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K';
+        return n >= 1 ? n.toFixed(4) : n.toPrecision(4);
+    };
+
+    const chartBase = { animation: false, responsive: true };
+
+    const ladderRows = (levels, side) =>
+        !levels?.length
+            ? '<tr><td colspan="3" class="hint text-center">—</td></tr>'
+            : levels.map(([p, q]) =>
+                `<tr><td>${side}</td><td class="text-right">${p}</td><td class="text-right">${q}</td></tr>`
+            ).join('');
+
+    function initCharts() {
+        charts.obi = new Chart($('chart-obi'), {
+            type: 'line',
+            data: { labels: [], datasets: [{ label: 'OBI', data: [], borderColor: '#000', borderWidth: 2, pointRadius: 0 }] },
+            options: { ...chartBase, scales: { y: { min: -1, max: 1 }, x: { display: false } }, plugins: { legend: { display: false } } },
+        });
+        charts.volume = new Chart($('chart-volume'), {
+            type: 'bar',
+            data: {
+                labels: ['Bid vol', 'Ask vol'],
+                datasets: [
+                    { label: 'Snapshot', data: [0, 0], backgroundColor: '#f97316' },
+                    { label: 'Local', data: [0, 0], backgroundColor: '#111' },
+                ],
+            },
+            options: { ...chartBase, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 9 } } } } } },
+        });
+        charts.depth = new Chart($('chart-depth'), {
+            type: 'bar',
+            data: { labels: [], datasets: [] },
+            options: { ...chartBase, indexAxis: 'y', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 9 } } } } } },
+        });
+    }
+
+    function resetCharts() {
+        obiHist.labels.length = 0;
+        obiHist.values.length = 0;
+        snapshotVol = { bid: null, ask: null };
+        charts.obi.data.labels = [];
+        charts.obi.data.datasets[0].data = [];
+        charts.obi.update();
+        charts.volume.data.datasets[0].data = [0, 0];
+        charts.volume.data.datasets[1].data = [0, 0];
+        charts.volume.update();
+        charts.depth.data.labels = [];
+        charts.depth.data.datasets = [];
+        charts.depth.update();
+    }
+
+    function setBadge(el, text, ...classes) {
+        el.className = ['badge', ...classes].join(' ');
+        el.textContent = text;
+    }
+
+    function clearUI() {
+        METRIC_IDS.forEach((id) => { $(id).textContent = '—'; });
+        META_IDS.forEach((id) => { $(id).textContent = '—'; });
+        $('asks-body').innerHTML = ladderRows([], 'ASK');
+        $('bids-body').innerHTML = ladderRows([], 'BID');
+        $('spread-row').textContent = 'spread —';
+        setBadge($('data-source-badge'), 'Source: —');
+        setBadge($('sync-badge'), 'Sync: …', 'badge-syncing');
+        $('pipe-local').className = 'border-2 border-black px-1 text-xs font-bold';
+        resetCharts();
+    }
+
+    function updateDepth(bids, asks) {
+        const labels = [], bidSz = [], askSz = [];
+        (asks || []).slice().reverse().forEach(([p, q]) => { labels.push(`A ${p}`); bidSz.push(0); askSz.push(+q || 0); });
+        (bids || []).forEach(([p, q]) => { labels.push(`B ${p}`); bidSz.push(+q || 0); askSz.push(0); });
+        charts.depth.data.labels = labels;
+        charts.depth.data.datasets = [
+            { label: 'Bid', data: bidSz, backgroundColor: '#22c55e' },
+            { label: 'Ask', data: askSz, backgroundColor: '#ef4444' },
+        ];
+        charts.depth.update();
+    }
+
+    function pushObi(v) {
+        obiHist.labels.push(new Date().toLocaleTimeString());
+        obiHist.values.push(v);
+        if (obiHist.labels.length > OBI_MAX) { obiHist.labels.shift(); obiHist.values.shift(); }
+        charts.obi.data.labels = obiHist.labels;
+        charts.obi.data.datasets[0].data = obiHist.values;
+        charts.obi.update();
+    }
+
+    function renderBook(d) {
+        const obi = +d.obi, spread = +d.spread, bidV = +d.bid_volume, askV = +d.ask_volume;
+
+        $('obi-val').textContent = Number.isFinite(obi) ? obi.toFixed(4) : '—';
+        $('spread-val').textContent = Number.isFinite(spread) ? fmt(spread) : '—';
+        $('best-bid-val').textContent = d.best_bid ?? '—';
+        $('best-ask-val').textContent = d.best_ask ?? '—';
+        $('bid-vol-val').textContent = fmt(bidV);
+        $('ask-vol-val').textContent = fmt(askV);
+        $('bid-levels-val').textContent = d.bid_levels ?? '—';
+        $('ask-levels-val').textContent = d.ask_levels ?? '—';
+        $('update-id-val').textContent = d.lastUpdateId ?? '—';
+
+        const isSnap = d.type === 'snapshot';
+        setBadge($('data-source-badge'), `Source: ${isSnap ? 'snapshot' : 'local'}`, isSnap ? 'badge-snapshot' : 'badge-local');
+        setBadge($('sync-badge'), `Sync: ${d.synced ? 'SYNCED' : '…'}`, d.synced ? 'badge-synced' : 'badge-syncing');
+        if (d.synced) $('pipe-local').className = 'border-2 border-black px-1 bg-black text-white text-xs font-bold';
+
+        $('spread-row').textContent = Number.isFinite(spread)
+            ? `spread ${fmt(spread)} · bid ${d.best_bid ?? '—'} · ask ${d.best_ask ?? '—'}`
+            : 'spread —';
+
+        $('asks-body').innerHTML = ladderRows(d.asks, 'ASK');
+        $('bids-body').innerHTML = ladderRows(d.bids, 'BID');
+
+        $('meta-type').textContent = d.type ?? '—';
+        $('meta-source').textContent = d.source ?? '—';
+        $('meta-symbol').textContent = d.pair ?? d.symbol ?? '—';
+        $('meta-synced').textContent = d.synced ? 'yes' : 'no';
+
+        if (d.pair) { $('pair-label').textContent = d.pair; document.title = `${d.pair} OBI`; }
+
+        if (isSnap) snapshotVol = { bid: bidV, ask: askV };
+        if (Number.isFinite(bidV) && Number.isFinite(askV)) {
+            charts.volume.data.datasets[0].data = [snapshotVol.bid ?? 0, snapshotVol.ask ?? 0];
+            charts.volume.data.datasets[1].data = [bidV, askV];
+            charts.volume.update();
+        }
+        if (d.type === 'book' && d.synced && Number.isFinite(obi)) pushObi(obi);
+        updateDepth(d.bids, d.asks);
+    }
+
+    function logLine(d) {
+        if (!d.message) return;
+        const extra = { ...d };
+        delete extra.type;
+        delete extra.message;
+        delete extra.symbol;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td class="whitespace-nowrap">${new Date().toLocaleTimeString()}</td><td>${d.message}</td><td class="hint break-all">${Object.keys(extra).length ? JSON.stringify(extra) : '—'}</td>`;
+        $('log-body').prepend(tr);
+        while ($('log-body').children.length > LOG_MAX) $('log-body').lastChild.remove();
+    }
+
+    function onMessage(d) {
+        switch (d.type) {
+            case 'hello':
+                $('symbol-select').innerHTML = d.symbols.map((s) =>
+                    `<option value="${s.id}"${s.id === d.symbol ? ' selected' : ''}>${s.pair}</option>`
+                ).join('');
+                currentSymbol = d.symbol;
+                if (d.pair) $('pair-label').textContent = d.pair;
+                break;
+            case 'symbol_ack':
+                $('symbol-select').disabled = false;
+                $('status-badge').textContent = 'WS: on';
+                $('status-badge').className = 'text-black text-xs font-bold';
+                if (d.ok) {
+                    currentSymbol = d.symbol;
+                    $('symbol-select').value = d.symbol;
+                    $('log-body').innerHTML = '';
+                    clearUI();
+                } else {
+                    $('symbol-select').value = currentSymbol;
+                }
+                break;
+            case 'status':
+                logLine(d);
+                break;
+            case 'snapshot':
+            case 'book':
+                if (d.symbol) { currentSymbol = d.symbol; $('symbol-select').value = d.symbol; }
+                renderBook(d);
+                break;
+        }
+    }
+
+    function connect() {
+        if (!location.host) {
+            $('status-badge').textContent = 'WS: use :8000';
+            $('status-badge').className = 'text-red-600 text-xs font-bold';
+            logLine({ message: 'open http://127.0.0.1:8000/' });
+            return;
+        }
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        ws = new WebSocket(WS_URL);
+        ws.onopen = () => { $('status-badge').textContent = 'WS: on'; $('status-badge').className = 'text-black text-xs font-bold'; };
+        ws.onerror = () => logLine({ message: 'websocket error' });
+        ws.onclose = () => {
+            $('status-badge').textContent = 'WS: off';
+            $('status-badge').className = 'text-red-600 text-xs';
+            reconnectTimer = setTimeout(connect, 2000);
+        };
+        ws.onmessage = (e) => {
+            try { onMessage(JSON.parse(e.data)); } catch { logLine({ message: 'bad json' }); }
+        };
+    }
+
+    $('symbol-select').addEventListener('change', () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN || $('symbol-select').value === currentSymbol) return;
+        $('symbol-select').disabled = true;
+        $('status-badge').textContent = 'WS: …';
+        clearUI();
+        ws.send(JSON.stringify({ action: 'set_symbol', symbol: $('symbol-select').value }));
+    });
+
+    initCharts();
+    clearUI();
+    connect();
+})();
+</script>
+</body>
+</html>

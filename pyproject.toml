@@ -1,0 +1,12 @@
+[project]
+name = "arbi-rag-crypto-agents"
+version = "0.1.0"
+description = "Binance local order book sync and OBI dashboard"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.136.3",
+    "httpx>=0.28.0",
+    "uvicorn[standard]>=0.30.0",
+    "websockets>=14.0",
+]

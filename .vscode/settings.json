@@ -1,0 +1,9 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.local-binance-spot-order-book/bin/python",
+  "terminal.integrated.env.osx": {
+    "UV_PROJECT_ENVIRONMENT": ".local-binance-spot-order-book"
+  },
+  "terminal.integrated.env.linux": {
+    "UV_PROJECT_ENVIRONMENT": ".local-binance-spot-order-book"
+  }
+}
