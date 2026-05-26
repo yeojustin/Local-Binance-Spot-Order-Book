@@ -127,8 +127,12 @@
     ];
     const META_IDS = ['meta-type', 'meta-source', 'meta-symbol', 'meta-synced'];
     const LOG_MAX = 100, OBI_MAX = 80;
+    const RECONNECT_BASE_MS = 1000;
+    const RECONNECT_MAX_MS = 30000;
+    const STALE_MS = 45000;
 
-    let ws = null, currentSymbol = null, reconnectTimer = null;
+    let ws = null, currentSymbol = null, reconnectTimer = null, staleTimer = null;
+    let reconnectAttempts = 0, connectToken = 0, intentionalClose = false;
     let snapshotVol = { bid: null, ask: null };
     const obiHist = { labels: [], values: [] };
     let charts = {};
@@ -150,10 +154,17 @@
             ).join('');
 
     function initCharts() {
+        const legendBottom = {
+            plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 9 } } } },
+        };
         charts.obi = new Chart($('chart-obi'), {
             type: 'line',
             data: { labels: [], datasets: [{ label: 'OBI', data: [], borderColor: '#000', borderWidth: 2, pointRadius: 0 }] },
-            options: { ...chartBase, scales: { y: { min: -1, max: 1 }, x: { display: false } }, plugins: { legend: { display: false } } },
+            options: {
+                ...chartBase,
+                scales: { y: { min: -1, max: 1 }, x: { display: false } },
+                plugins: { legend: { display: false } },
+            },
         });
         charts.volume = new Chart($('chart-volume'), {
             type: 'bar',
@@ -164,12 +175,12 @@
                     { label: 'Local', data: [0, 0], backgroundColor: '#111' },
                 ],
             },
-            options: { ...chartBase, plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 9 } } } } } },
+            options: { ...chartBase, ...legendBottom },
         });
         charts.depth = new Chart($('chart-depth'), {
             type: 'bar',
             data: { labels: [], datasets: [] },
-            options: { ...chartBase, indexAxis: 'y', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 9 } } } } } },
+            options: { ...chartBase, indexAxis: 'y', ...legendBottom },
         });
     }
 
@@ -313,26 +324,124 @@
         }
     }
 
+    function setWsStatus(text, className) {
+        $('status-badge').textContent = text;
+        $('status-badge').className = className;
+    }
+
+    function clearReconnectTimer() {
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+    }
+
+    function clearStaleTimer() {
+        if (staleTimer) {
+            clearTimeout(staleTimer);
+            staleTimer = null;
+        }
+    }
+
+    function resetStaleTimer() {
+        clearStaleTimer();
+        staleTimer = setTimeout(() => {
+            logLine({ message: 'no messages — forcing reconnect', stale_ms: STALE_MS });
+            teardownSocket();
+            scheduleReconnect('stale');
+        }, STALE_MS);
+    }
+
+    function teardownSocket() {
+        clearStaleTimer();
+        if (!ws) return;
+        const socket = ws;
+        ws = null;
+        socket.onopen = socket.onclose = socket.onerror = socket.onmessage = null;
+        intentionalClose = true;
+        try {
+            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+                socket.close();
+            }
+        } catch { /* ignore */ }
+        intentionalClose = false;
+    }
+
+    function scheduleReconnect(reason) {
+        if (intentionalClose || reconnectTimer) return;
+        reconnectAttempts += 1;
+        const delay = Math.min(RECONNECT_BASE_MS * 2 ** (reconnectAttempts - 1), RECONNECT_MAX_MS);
+        const secs = Math.max(1, Math.round(delay / 1000));
+        setWsStatus(`WS: reconnecting in ${secs}s`, 'text-red-600 text-xs font-bold');
+        setBadge($('sync-badge'), 'Sync: …', 'badge-syncing');
+        $('symbol-select').disabled = false;
+        logLine({ message: 'disconnected — auto-reconnect', reason, attempt: reconnectAttempts, delay_ms: delay });
+        reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+        }, delay);
+    }
+
     function connect() {
         if (!location.host) {
-            $('status-badge').textContent = 'WS: use :8000';
-            $('status-badge').className = 'text-red-600 text-xs font-bold';
+            setWsStatus('WS: use :8000', 'text-red-600 text-xs font-bold');
             logLine({ message: 'open http://127.0.0.1:8000/' });
             return;
         }
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        ws = new WebSocket(WS_URL);
-        ws.onopen = () => { $('status-badge').textContent = 'WS: on'; $('status-badge').className = 'text-black text-xs font-bold'; };
-        ws.onerror = () => logLine({ message: 'websocket error' });
-        ws.onclose = () => {
-            $('status-badge').textContent = 'WS: off';
-            $('status-badge').className = 'text-red-600 text-xs';
-            reconnectTimer = setTimeout(connect, 2000);
+
+        clearReconnectTimer();
+        teardownSocket();
+
+        const token = ++connectToken;
+        setWsStatus('WS: connecting…', 'text-gray-600 text-xs font-bold');
+
+        const socket = new WebSocket(WS_URL);
+        ws = socket;
+
+        socket.onopen = () => {
+            if (token !== connectToken) return;
+            reconnectAttempts = 0;
+            setWsStatus('WS: on', 'text-black text-xs font-bold');
+            resetStaleTimer();
+            logLine({ message: 'websocket connected' });
         };
-        ws.onmessage = (e) => {
-            try { onMessage(JSON.parse(e.data)); } catch { logLine({ message: 'bad json' }); }
+
+        socket.onerror = () => {
+            if (token !== connectToken) return;
+            logLine({ message: 'websocket error' });
+        };
+
+        socket.onclose = () => {
+            if (token !== connectToken) return;
+            clearStaleTimer();
+            ws = null;
+            setWsStatus('WS: off', 'text-red-600 text-xs');
+            if (!intentionalClose) scheduleReconnect('close');
+        };
+
+        socket.onmessage = (e) => {
+            if (token !== connectToken) return;
+            resetStaleTimer();
+            try {
+                onMessage(JSON.parse(e.data));
+            } catch (err) {
+                logLine({ message: 'message error', error: String(err) });
+            }
         };
     }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+            reconnectAttempts = 0;
+            connect();
+        }
+    });
+
+    window.addEventListener('online', () => {
+        reconnectAttempts = 0;
+        connect();
+    });
 
     $('symbol-select').addEventListener('change', () => {
         if (!ws || ws.readyState !== WebSocket.OPEN || $('symbol-select').value === currentSymbol) return;

@@ -27,7 +27,7 @@ No trading. No API keys — public market data only.
 Python 3.12+ and [uv](https://github.com/astral-sh/uv) (or pip).
 
 ```bash
-cd Arbi-rag-crypto-agents
+cd binance-local-order-book
 uv sync
 uv run uvicorn obi_imbalance:app --reload
 ```
