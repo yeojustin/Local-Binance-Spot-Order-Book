@@ -8,17 +8,7 @@ No trading. No API keys — public market data only.
 
 ## Table of contents
 
-- [Run the app](#run-the-app)
-- [What this does](#what-this-does)
-- [The dashboard](#the-dashboard)
-- [Terms](#terms)
-- [Why snapshot + diffs](#why-snapshot--diffs)
-- [Files](#files)
-- [How the sync works](#how-the-sync-works)
-- [Endpoints and env vars](#endpoints-and-env-vars)
-- [WebSocket messages](#websocket-messages)
-- [When something looks wrong](#when-something-looks-wrong)
-- [Binance links](#binance-links)
+[Run the app](#run-the-app) · [What this does](#what-this-does) · [The dashboard](#the-dashboard) · [Terms](#terms) · [Why snapshot + diffs](#why-snapshot--diffs) · [Files](#files) · [How the sync works](#how-the-sync-works) · [Endpoints and env vars](#endpoints-and-env-vars) · [WebSocket messages](#websocket-messages) · [When something looks wrong](#when-something-looks-wrong) · [Binance links](#binance-links)
 
 ---
 
@@ -27,20 +17,22 @@ No trading. No API keys — public market data only.
 Python 3.12+ and [uv](https://github.com/astral-sh/uv) (or pip).
 
 ```bash
-cd binance-local-order-book
+cd Binance-Local-Order-Book
 uv sync
 uv run uvicorn obi_imbalance:app --reload
 ```
 
 Open **http://127.0.0.1:8000/** (serve via uvicorn — don't open `index.html` as a file).
 
-**Working looks like:**
+**Working looks like**
 
-1. Sync log shows `step 1` … `step 8: synced, applying live events`
-2. **Sync: SYNCED** in the header
-3. Metrics table filling in; charts updating; book ladder showing asks/bids
+| Check | Expected |
+|-------|----------|
+| Sync log | `step 1` … `step 8: synced, applying live events` |
+| Header | **Sync: SYNCED** |
+| Dashboard | Metrics table filling in; charts updating; book ladder showing asks/bids |
 
-**Env vars:**
+**Env vars**
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -66,8 +58,10 @@ Binance REST + WS  →  obi_imbalance.py  →  WebSocket /ws  →  index.html
    (snapshot+diffs)      merge + OBI            JSON              display only
 ```
 
-- **Backend** talks to Binance, maintains the local book, computes OBI, broadcasts JSON.
-- **Frontend** only renders server messages. No Binance connection, no OBI math in the browser.
+| Layer | Role |
+|-------|------|
+| **Backend** | Talks to Binance, maintains the local book, computes OBI, broadcasts JSON |
+| **Frontend** | Renders server messages only — no Binance connection, no OBI math in the browser |
 
 If OBI is wrong, debug `obi_imbalance.py`, not the HTML.
 
@@ -86,11 +80,13 @@ If OBI is wrong, debug `obi_imbalance.py`, not the HTML.
 | **Server state** | Last message: type, source, symbol, synced |
 | **Sync log** | Backend steps (`step 1`…`step 8`, resyncs, errors) — Time \| Message \| Extra |
 
-**Message types from server:**
+**Message types from server**
 
-- `snapshot` — book right after REST load (step 7), before diffs catch up
-- `book` — local book after each applied diff (live)
-- `status` — sync log lines only
+| `type` | When |
+|--------|------|
+| `snapshot` | Book right after REST load (step 7), before diffs catch up |
+| `book` | Local book after each applied diff (live) |
+| `status` | Sync log lines only |
 
 ---
 
@@ -111,10 +107,7 @@ OBI uses **all levels** in the local book (default 100 per side). The ladder sho
 
 ## Why snapshot + diffs
 
-Binance sends patches, not the full book every tick. You need:
-
-1. REST snapshot (starting picture)
-2. Ordered websocket diffs (updates)
+Binance sends patches, not the full book every tick. You need a REST snapshot (starting picture) and ordered websocket diffs (updates).
 
 Skip or mis-order a diff → local book drifts → OBI lies.
 
@@ -132,7 +125,7 @@ index.html         # Dashboard (Chart.js), display only
 pyproject.toml     # fastapi, httpx, uvicorn, websockets
 ```
 
-**Backend:**
+**Backend**
 
 | Piece | Role |
 |-------|------|
@@ -156,11 +149,13 @@ pyproject.toml     # fastapi, httpx, uvicorn, websockets
 | 7 | Load snapshot → emit `type: snapshot` | `load_snapshot` + broadcast |
 | 8 | Apply buffer + live diffs → emit `type: book` | `apply_depth_event` |
 
-**Per diff after merge:**
+**Per diff after merge**
 
-- `u <= local id` → ignore  
-- `U > local id + 1` → missed events → full restart  
-- else update `b` / `a`, set local id to `u`
+| Condition | Action |
+|-----------|--------|
+| `u <= local id` | ignore |
+| `U > local id + 1` | missed events → full restart |
+| else | update `b` / `a`, set local id to `u` |
 
 Diff fields: `U`, `u`, `b`, `a` (and `pu` on the wire).
 
@@ -229,7 +224,7 @@ Example `book` payload:
 
 | Symptom | Likely cause |
 |---------|----------------|
-| `WS: OFFLINE` | Server not running or wrong URL |
+| `WS: off` | Server not running or wrong URL |
 | Book empty, **SYNCING** | Still on steps 1–8 |
 | `step 4: snapshot too old` | Refetching REST |
 | `step 6: snapshot not bridged` | Resyncing |
@@ -242,6 +237,4 @@ Example `book` payload:
 
 ## Binance links
 
-- [REST depth](https://developers.binance.com/docs/binance-spot-api-docs/rest-api#order-book)
-- [Diff depth stream](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams#diff-depth-stream)
-- [Local order book how-to](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams#how-to-manage-a-local-order-book-correctly)
+[REST depth](https://developers.binance.com/docs/binance-spot-api-docs/rest-api#order-book) · [Diff depth stream](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams#diff-depth-stream) · [Local order book how-to](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams#how-to-manage-a-local-order-book-correctly)
